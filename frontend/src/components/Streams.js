@@ -13,6 +13,11 @@ import {
   Chip,
   Snackbar,
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -37,6 +42,7 @@ function Streams() {
   const [selectedStream, setSelectedStream] = useState(null);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  const [errorDetails, setErrorDetails] = useState({ open: false, message: '', timestamp: null });
 
   const showSnackbar = (message, severity = 'info') => {
     setSnackbar({ open: true, message, severity });
@@ -44,6 +50,18 @@ function Streams() {
 
   const handleCloseSnackbar = () => {
     setSnackbar({ ...snackbar, open: false });
+  };
+
+  const handleErrorClick = (error) => {
+    setErrorDetails({
+      open: true,
+      message: error.message,
+      timestamp: error.timestamp
+    });
+  };
+
+  const handleCloseErrorDetails = () => {
+    setErrorDetails({ open: false, message: '', timestamp: null });
   };
 
   useEffect(() => {
@@ -104,10 +122,11 @@ function Streams() {
   };
 
   const exportM3U = () => {
+    const DEFAULT_LOGO = '/logo192.png';
     let m3uContent = '#EXTM3U\n';
     
     streams.forEach(stream => {
-      m3uContent += `#EXTINF:-1 tvg-name="${stream.channelName}"${stream.logo ? ` tvg-logo="${stream.logo}"` : ''}, ${stream.channelName}\n`;
+      m3uContent += `#EXTINF:-1 tvg-name="${stream.channelName}" tvg-logo="${stream.logo || DEFAULT_LOGO}", ${stream.channelName}\n`;
       m3uContent += `${getStreamUrl(stream)}\n`;
     });
 
@@ -130,6 +149,7 @@ function Streams() {
       setError(null);
     } catch (err) {
       console.error('Error fetching streams:', err);
+      console.error(err); // Add error logging
       setError('Failed to fetch streams');
     }
   };
@@ -150,19 +170,30 @@ function Streams() {
 
   const toggleStream = async (stream) => {
     try {
-      if (stream.status === 'running') {
-        await axios.post(`/api/streams/${stream.id}/stop`);
-        showSnackbar('Stream stopped successfully', 'success');
-      } else {
-        await axios.post(`/api/streams/${stream.id}/restart`, {
-          ignoreErrors: stream.ignoreErrors
-        });
-        showSnackbar('Stream restarted successfully', 'success');
-      }
-      fetchStreams();
+      setStreams(prevStreams => 
+        prevStreams.map(s => 
+          s.id === stream.id 
+            ? { ...s, status: 'restarting', lastError: null }
+            : s
+        )
+      );
+
+      const response = await axios.post(`/api/streams/${stream.id}/restart`);
+      console.log('Restart response:', response.data);
+      
+      await fetchStreams();
+      showSnackbar('Stream restarted successfully', 'success');
     } catch (err) {
-      showSnackbar(`Failed to ${stream.status === 'running' ? 'stop' : 'restart'} stream`, 'error');
       console.error('Error toggling stream:', err);
+      showSnackbar(`Failed to ${stream.status === 'running' ? 'stop' : 'restart'} stream`, 'error');
+      
+      setStreams(prevStreams => 
+        prevStreams.map(s => 
+          s.id === stream.id 
+            ? { ...s, lastError: err.message }
+            : s
+        )
+      );
     }
   };
 
@@ -273,6 +304,19 @@ function Streams() {
   const getStreamStatus = (stream) => {
     const stats = streamStats[stream.id];
     if (!stats) return { icon: null, color: 'default', text: stream.status || 'unknown' };
+
+    if (stream.lastError) {
+      const errorTime = new Date(stream.lastError.timestamp).toLocaleString();
+      return { 
+        icon: <ErrorIcon />, 
+        color: 'error',
+        text: (
+          <span onClick={() => handleErrorClick(stream.lastError)} style={{ cursor: 'pointer' }}>
+            Error at {errorTime} (click for details)
+          </span>
+        )
+      };
+    }
 
     if (stats.error) {
       return { 
@@ -539,6 +583,23 @@ function Streams() {
         }}
         streamUrl={selectedStream ? getStreamUrl(selectedStream) : ''}
       />
+
+      <Dialog open={errorDetails.open} onClose={handleCloseErrorDetails}>
+        <DialogTitle>Stream Error Details</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            <strong>Time:</strong> {new Date(errorDetails.timestamp).toLocaleString()}
+            <br />
+            <strong>Error:</strong>
+            <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+              {errorDetails.message}
+            </pre>
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseErrorDetails}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={snackbar.open}

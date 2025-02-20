@@ -115,8 +115,8 @@ async function startStream(id, url, options = {}) {
 
     // Add ignore errors flag if specified
     if (options.ignoreErrors) {
-        console.log('Adding -xerror flag for stream:', id);
-        ffmpegArgs.push('-xerror');
+        console.log('Adding -err_detect ignore_err flag for stream:', id);
+        ffmpegArgs.push('-err_detect', 'ignore_err');
     }
 
     // Add output path
@@ -128,8 +128,15 @@ async function startStream(id, url, options = {}) {
     console.log('FFmpeg command:', 'ffmpeg', ffmpegArgs.join(' '));
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
+    let lastError = { message: '', timestamp: null };
     ffmpeg.stderr.on('data', (data) => {
-        console.log(`Stream ${id} ffmpeg: ${data}`);
+        const errorMessage = data.toString();
+        console.log(`Stream ${id} ffmpeg: ${errorMessage}`);
+        lastError = { message: errorMessage, timestamp: Date.now() };
+    });
+
+    ffmpeg.on('error', (error) => {
+        console.error(`Stream ${id} ffmpeg error:`, error);
     });
 
     ffmpeg.on('close', (code) => {
@@ -137,6 +144,8 @@ async function startStream(id, url, options = {}) {
         if (activeStreams.has(id)) {
             const stream = activeStreams.get(id);
             stream.status = 'stopped';
+            stream.lastError = lastError;
+            console.log('Stream error details:', stream.lastError);
             // Clean up stream directory
             fs.rm(streamDir, { recursive: true, force: true }).catch(console.error);
         }
@@ -298,13 +307,14 @@ app.delete('/stream/:id', async (req, res) => {
 
 // Get all active streams
 app.get('/streams', (req, res) => {
-    const streams = Array.from(activeStreams.values()).map(({ id, url, proxyUrl, status, startTime, ignoreErrors }) => ({
+    const streams = Array.from(activeStreams.values()).map(({ id, url, proxyUrl, status, startTime, ignoreErrors, lastError }) => ({
         id,
         url,
         proxyUrl,
         status,
         startTime,
-        ignoreErrors
+        ignoreErrors,
+        lastError
     }));
     
     res.json(streams);
